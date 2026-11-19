@@ -24,7 +24,7 @@ def make_pack(job_id, topic):
     }
     drive=services()
     folder_id=create_folder(drive,job_id,os.environ['DRIVE_INBOX_FOLDER_ID'])
-    manifest={'title':title,'format':fmt,'language':'English','target_audience':'United States and Europe','target_minutes':8 if fmt=='long' else 1,'english_narration':'','english_subtitles':'','youtube_description':'An original English-language cinematic horror story for viewers in the United States and Europe. Fictional entertainment.','youtube_tags':['horror story','scary stories','paranormal','supernatural horror','short horror film'],'publish':False,'telegram_delivery':True}
+    manifest={'title':title,'format':fmt,'language':'English','target_audience':'United States and Europe','target_minutes':8 if fmt=='long' else 1,'english_narration':'','english_subtitles':'','youtube_description':'An original English-language cinematic horror story for viewers in the United States and Europe. Fictional entertainment.','youtube_tags':['horror story','scary stories','paranormal','supernatural horror','short horror film'],'publish':True,'telegram_delivery':True}
     upload_json(drive,manifest,'manifest.json',folder_id)
     os.makedirs('work',exist_ok=True)
     with open(f'work/{job_id}_prompt_pack.json','w',encoding='utf-8') as f: json.dump(pack,f,ensure_ascii=False,indent=2)
