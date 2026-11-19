@@ -1,5 +1,6 @@
 
 name: Horror production
+
 on:
   workflow_dispatch:
     inputs:
@@ -14,7 +15,7 @@ on:
         required: true
         type: string
       topic_title:
-        description: 'Approved topic (story_pack only)'
+        description: 'Approved topic'
         required: false
         type: string
       format:
@@ -23,20 +24,28 @@ on:
         default: 'short'
         type: choice
         options: [short, long]
+
 permissions:
   contents: read
+
 jobs:
   produce:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: '3.12'}
+        with:
+          python-version: '3.12'
+
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
+
       - name: Create story and Flow prompt pack
         if: inputs.action == 'story_pack'
         env:
@@ -50,7 +59,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/create_story_pack.py
-      - name: Download Drive clips, render, and upload to Drive
+
+      - name: Render video from Drive clips
         if: inputs.action == 'render'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
@@ -58,8 +68,11 @@ jobs:
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           DRIVE_INBOX_FOLDER_ID: ${{ secrets.DRIVE_INBOX_FOLDER_ID }}
           DRIVE_OUTPUT_FOLDER_ID: ${{ secrets.DRIVE_OUTPUT_FOLDER_ID }}
-        run: mkdir -p work && python -m src.render '${{ inputs.job_id }}' | tee work/render-result.json
-      - name: Upload to YouTube when manifest publish is true
+        run: |
+          mkdir -p work
+          python -m src.render "${{ inputs.job_id }}" | tee work/render-result.json
+
+      - name: Upload video to YouTube
         if: inputs.action == 'render'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
@@ -68,18 +81,28 @@ jobs:
           YOUTUBE_PRIVACY_STATUS: ${{ secrets.YOUTUBE_PRIVACY_STATUS }}
         run: |
           python - <<'PY'
-          import json, os
-          r=json.load(open('work/render-result.json', encoding='utf-8'))
-          if r.get('publish'):
-              from src.youtube import main
-              main('work/final.mp4','work/manifest.json')
+          import json
+          from src.youtube import main
+          result = json.load(open("work/render-result.json", encoding="utf-8"))
+          if result.get("publish"):
+              url = main("work/final.mp4", "work/manifest.json")
+              with open("work/youtube-result.json", "w", encoding="utf-8") as f:
+                  json.dump({"youtube_url": url}, f)
           else:
-              print('YouTube upload skipped: manifest publish is false.')
+              print("YouTube upload skipped: manifest publish is false.")
           PY
-      - name: Upload render metadata as workflow artifact
+
+      - name: Send finished Short to Telegram
+        if: inputs.action == 'render'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.notify_telegram
+
+      - name: Save render metadata
         if: always() && inputs.action == 'render'
         uses: actions/upload-artifact@v4
         with:
           name: horror-${{ inputs.job_id }}-metadata
-          path: work/render-result.json
+          path: work/
           if-no-files-found: ignore
