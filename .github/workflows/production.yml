@@ -1,0 +1,85 @@
+
+name: Horror production
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'story_pack or render'
+        required: true
+        default: 'story_pack'
+        type: choice
+        options: [story_pack, render]
+      job_id:
+        description: 'Drive INBOX job folder name'
+        required: true
+        type: string
+      topic_title:
+        description: 'Approved topic (story_pack only)'
+        required: false
+        type: string
+      format:
+        description: 'short or long'
+        required: false
+        default: 'short'
+        type: choice
+        options: [short, long]
+permissions:
+  contents: read
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Create story and Flow prompt pack
+        if: inputs.action == 'story_pack'
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          DRIVE_INBOX_FOLDER_ID: ${{ secrets.DRIVE_INBOX_FOLDER_ID }}
+          JOB_ID: ${{ inputs.job_id }}
+          TOPIC_TITLE: ${{ inputs.topic_title }}
+          FORMAT: ${{ inputs.format }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/create_story_pack.py
+      - name: Download Drive clips, render, and upload to Drive
+        if: inputs.action == 'render'
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          DRIVE_INBOX_FOLDER_ID: ${{ secrets.DRIVE_INBOX_FOLDER_ID }}
+          DRIVE_OUTPUT_FOLDER_ID: ${{ secrets.DRIVE_OUTPUT_FOLDER_ID }}
+        run: mkdir -p work && python -m src.render '${{ inputs.job_id }}' | tee work/render-result.json
+      - name: Upload to YouTube when manifest publish is true
+        if: inputs.action == 'render'
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          YOUTUBE_PRIVACY_STATUS: ${{ secrets.YOUTUBE_PRIVACY_STATUS }}
+        run: |
+          python - <<'PY'
+          import json, os
+          r=json.load(open('work/render-result.json', encoding='utf-8'))
+          if r.get('publish'):
+              from src.youtube import main
+              main('work/final.mp4','work/manifest.json')
+          else:
+              print('YouTube upload skipped: manifest publish is false.')
+          PY
+      - name: Upload render metadata as workflow artifact
+        if: always() && inputs.action == 'render'
+        uses: actions/upload-artifact@v4
+        with:
+          name: horror-${{ inputs.job_id }}-metadata
+          path: work/render-result.json
+          if-no-files-found: ignore
