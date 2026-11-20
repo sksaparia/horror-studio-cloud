@@ -106,3 +106,6 @@ jobs:
           name: horror-${{ inputs.job_id }}-metadata
           path: work/
           if-no-files-found: ignore
+      - name: Install FFmpeg
+        if: inputs.action == 'render'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
