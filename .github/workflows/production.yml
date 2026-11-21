@@ -26,7 +26,7 @@ on:
 
       format:
         description: 'short or long'
-        required: true
+        required: false
         default: 'short'
         type: choice
         options:
@@ -45,7 +45,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   produce:
@@ -85,7 +84,6 @@ jobs:
         run: PYTHONPATH=. python scripts/create_story_pack.py
 
       - name: Receive individual Telegram clip
-        id: receive
         if: inputs.action == 'receive_clip'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
@@ -98,47 +96,6 @@ jobs:
           SCENE_NUMBER: ${{ inputs.scene_number }}
           FORMAT: ${{ inputs.format }}
         run: PYTHONPATH=. python scripts/receive_telegram_clip.py
-
-      - name: Start rendering automatically after all clips arrive
-        if: inputs.action == 'receive_clip' && steps.receive.outputs.all_clips == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPOSITORY: ${{ github.repository }}
-          GH_REF: ${{ github.ref_name }}
-          JOB_ID: ${{ inputs.job_id }}
-          VIDEO_FORMAT: ${{ inputs.format }}
-        run: |
-          python - <<'PY'
-          import os
-          import requests
-
-          url = (
-              f"https://api.github.com/repos/"
-              f"{os.environ['GH_REPOSITORY']}/actions/workflows/"
-              f"production.yml/dispatches"
-          )
-
-          response = requests.post(
-              url,
-              headers={
-                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-                  "Accept": "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-              },
-              json={
-                  "ref": os.environ["GH_REF"],
-                  "inputs": {
-                      "action": "render",
-                      "job_id": os.environ["JOB_ID"],
-                      "format": os.environ["VIDEO_FORMAT"],
-                  },
-              },
-              timeout=30,
-          )
-
-          response.raise_for_status()
-          print("All clips received. Rendering workflow dispatched.")
-          PY
 
       - name: Render video from Drive clips
         id: render
@@ -154,7 +111,7 @@ jobs:
           python -m src.render "${{ inputs.job_id }}" | tee work/render-result.json
 
       - name: Upload video to YouTube
-        if: inputs.action == 'render' && steps.render.outcome == 'success'
+        if: inputs.action == 'render'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
