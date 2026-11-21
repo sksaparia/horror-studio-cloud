@@ -1,41 +1,135 @@
-import os, re, uuid, requests, xml.etree.ElementTree as ET
-from urllib.parse import quote
+
+import os
+import uuid
+import random
+import hashlib
+import requests
+from datetime import datetime, timezone
+
+IDEAS = [
+    ("The Hotel Room That Appears Only at 3:17 AM",
+     "United States",
+     "A night receptionist discovers a hotel room that appears on CCTV but does not exist on any floor plan."),
+
+    ("The Last Train from the Scottish Highlands",
+     "United Kingdom",
+     "A passenger boards the final train home and discovers that every other passenger disappeared decades ago."),
+
+    ("The Voice Calling from Apartment 13",
+     "United States",
+     "A tenant hears a child calling through a sealed apartment wall, although the building has no thirteenth floor."),
+
+    ("The Village That Disappears from Every Map",
+     "Europe",
+     "A travel photographer finds a forgotten village where residents insist that nobody has ever visited before."),
+
+    ("The Night Shift at Blackwood Hospital",
+     "United Kingdom",
+     "A security guard receives instructions from a hospital ward that was permanently closed thirty years ago."),
+
+    ("Something Is Living Beneath the Ice",
+     "Iceland",
+     "Researchers at a remote research station hear knocking from beneath several metres of frozen ice."),
+
+    ("The Woman in the Empty Highway Diner",
+     "United States",
+     "A truck driver meets a woman at a roadside diner, then discovers that the diner burned down years earlier."),
+
+    ("The Lighthouse That Sends Signals to Nobody",
+     "Ireland",
+     "A new lighthouse keeper notices a mysterious signal coming from the sea, answered by something beneath the waves."),
+
+    ("The Locked Basement of the Old Manor",
+     "United Kingdom",
+     "A family renovating an old manor finds fresh footprints leading into a basement that has been locked for a century."),
+
+    ("The Hotel Guests Who Never Check Out",
+     "France",
+     "A night manager discovers that several guests have occupied the same rooms for over fifty years."),
+
+    ("The Forest Road That Loops Forever",
+     "Germany",
+     "A couple driving through a forest repeatedly passes the same abandoned car, with someone waving from inside."),
+
+    ("The Missing Children of Briarwood",
+     "United States",
+     "A small town's old school photographs reveal the same mysterious child appearing in every graduating class."),
+
+    ("The Midnight Ferry to Nowhere",
+     "Norway",
+     "Passengers on a midnight ferry realise the coastline has vanished and the captain refuses to stop."),
+
+    ("The Apartment Above the Ceiling",
+     "United States",
+     "A woman hears furniture moving above her ceiling, despite living on the top floor of the building."),
+
+    ("The Village Bell That Rings Underground",
+     "Europe",
+     "Every night at midnight, villagers hear a church bell ringing beneath the cemetery.")
+]
+
 
 def main():
-    # Pull English-language trend ideas from the US, UK and Ireland. The approved
-    # creative brief always targets English-speaking audiences in the US + Europe.
-    geos=[("US","United States"),("GB","United Kingdom"),("IE","Ireland")]
-    picks=[]
-    for geo, label in geos:
-        url=f"https://trends.google.com/trending/rss?geo={geo}"
-        try:
-            r=requests.get(url,timeout=25,headers={"User-Agent":"Mozilla/5.0"}); r.raise_for_status()
-            root=ET.fromstring(r.content)
-            for item in root.findall(".//item")[:12]:
-                title=(item.findtext("title") or "").strip()
-                # Keep mostly English/Latin-script topic titles; no India/South Asia feed.
-                if title and re.search(r"[A-Za-z]",title) and not re.search(r"[\u0900-\u097F]",title):
-                    picks.append((title,label))
-        except Exception as e:
-            print(f"Trend feed {geo} unavailable: {e}")
-    # Deduplicate and cap suggestions; trending terms are inspiration, not verified horror news.
-    seen=set(); unique=[]
-    for title, region in picks:
-        key=title.casefold()
-        if key not in seen:
-            seen.add(key); unique.append((title,region))
-        if len(unique)>=5: break
-    if not unique:
-        unique=[("The abandoned motel on a lonely American highway","United States"),
-                ("The last night train through the Scottish Highlands","United Kingdom"),
-                ("The locked room in an old European hotel","Europe")]
-    token=os.environ["TELEGRAM_BOT_TOKEN"]; chat=os.environ["TELEGRAM_CHAT_ID"]
-    worker=os.environ["CLOUDFLARE_WORKER_URL"].rstrip("/")
-    for title,region in unique:
-        tid=uuid.uuid4().hex[:10]
-        title=f"{title} — {region} inspiration"
-        requests.post(worker+"/topic",headers={"x-topic-ingest-secret":os.environ["TOPIC_INGEST_SECRET"]},json={"id":tid,"title":title},timeout=20).raise_for_status()
-        kb={"inline_keyboard":[[{"text":"✅ Approve & create English story pack","callback_data":"approve:"+tid},{"text":"Skip","callback_data":"skip:"+tid}]]}
-        msg=f"US / EUROPE TREND INSPIRATION — APPROVAL REQUIRED\n\n{title}\n\nAll scripts, narration, subtitles and metadata will be English, with settings in the United States or Europe. These are creative prompts, not verified horror trends. Nothing is generated or published until you approve and later upload Flow clips."
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",json={"chat_id":chat,"text":msg,"reply_markup":kb},timeout=20).raise_for_status()
-if __name__=="__main__": main()
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    chat = os.environ["TELEGRAM_CHAT_ID"]
+    worker = os.environ["CLOUDFLARE_WORKER_URL"].rstrip("/")
+    ingest_secret = os.environ["TOPIC_INGEST_SECRET"]
+
+    # Select the same five ideas throughout each UTC day.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    seed = int(hashlib.sha256(today.encode()).hexdigest()[:8], 16)
+    rng = random.Random(seed)
+    selected = rng.sample(IDEAS, 5)
+
+    for story, region, premise in selected:
+        tid = uuid.uuid4().hex[:10]
+        title = f"{story} — {region}"
+
+        r = requests.post(
+            worker + "/topic",
+            headers={"x-topic-ingest-secret": ingest_secret},
+            json={"id": tid, "title": title},
+            timeout=20
+        )
+        r.raise_for_status()
+
+        keyboard = {
+            "inline_keyboard": [[
+                {
+                    "text": "✅ Approve & create story pack",
+                    "callback_data": "approve:" + tid
+                },
+                {
+                    "text": "Skip",
+                    "callback_data": "skip:" + tid
+                }
+            ]]
+        }
+
+        message = (
+            "DAILY HORROR STORY IDEAS\n"
+            "US / UK / EUROPE\n\n"
+            f"TITLE: {story}\n"
+            f"SETTING: {region}\n\n"
+            f"STORY CONCEPT:\n{premise}\n\n"
+            "Original fictional horror concept. "
+            "English story, narration and subtitles. "
+            "Nothing is generated or published until you approve."
+        )
+
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat,
+                "text": message,
+                "reply_markup": keyboard
+            },
+            timeout=20
+        )
+        response.raise_for_status()
+
+    print(f"Successfully sent {len(selected)} horror ideas to Telegram.")
+
+
+if __name__ == "__main__":
+    main()
