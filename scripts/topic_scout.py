@@ -1,135 +1,220 @@
 
 import os
 import uuid
-import random
-import hashlib
+import time
 import requests
-from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
+from urllib.parse import quote
 
-IDEAS = [
-    ("The Hotel Room That Appears Only at 3:17 AM",
-     "United States",
-     "A night receptionist discovers a hotel room that appears on CCTV but does not exist on any floor plan."),
+BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+WORKER = os.environ["CLOUDFLARE_WORKER_URL"].rstrip("/")
+INGEST_SECRET = os.environ["TOPIC_INGEST_SECRET"]
 
-    ("The Last Train from the Scottish Highlands",
-     "United Kingdom",
-     "A passenger boards the final train home and discovers that every other passenger disappeared decades ago."),
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 HorrorStudioCloud/1.0"
+}
 
-    ("The Voice Calling from Apartment 13",
-     "United States",
-     "A tenant hears a child calling through a sealed apartment wall, although the building has no thirteenth floor."),
-
-    ("The Village That Disappears from Every Map",
-     "Europe",
-     "A travel photographer finds a forgotten village where residents insist that nobody has ever visited before."),
-
-    ("The Night Shift at Blackwood Hospital",
-     "United Kingdom",
-     "A security guard receives instructions from a hospital ward that was permanently closed thirty years ago."),
-
-    ("Something Is Living Beneath the Ice",
-     "Iceland",
-     "Researchers at a remote research station hear knocking from beneath several metres of frozen ice."),
-
-    ("The Woman in the Empty Highway Diner",
-     "United States",
-     "A truck driver meets a woman at a roadside diner, then discovers that the diner burned down years earlier."),
-
-    ("The Lighthouse That Sends Signals to Nobody",
-     "Ireland",
-     "A new lighthouse keeper notices a mysterious signal coming from the sea, answered by something beneath the waves."),
-
-    ("The Locked Basement of the Old Manor",
-     "United Kingdom",
-     "A family renovating an old manor finds fresh footprints leading into a basement that has been locked for a century."),
-
-    ("The Hotel Guests Who Never Check Out",
-     "France",
-     "A night manager discovers that several guests have occupied the same rooms for over fifty years."),
-
-    ("The Forest Road That Loops Forever",
-     "Germany",
-     "A couple driving through a forest repeatedly passes the same abandoned car, with someone waving from inside."),
-
-    ("The Missing Children of Briarwood",
-     "United States",
-     "A small town's old school photographs reveal the same mysterious child appearing in every graduating class."),
-
-    ("The Midnight Ferry to Nowhere",
-     "Norway",
-     "Passengers on a midnight ferry realise the coastline has vanished and the captain refuses to stop."),
-
-    ("The Apartment Above the Ceiling",
-     "United States",
-     "A woman hears furniture moving above her ceiling, despite living on the top floor of the building."),
-
-    ("The Village Bell That Rings Underground",
-     "Europe",
-     "Every night at midnight, villagers hear a church bell ringing beneath the cemetery.")
+COUNTRIES = [
+    ("US", "United States", "en-US", "US:en"),
+    ("GB", "United Kingdom", "en-GB", "GB:en"),
+    ("DE", "Germany", "en-GB", "DE:en"),
+    ("FR", "France", "en-GB", "FR:en"),
+    ("IT", "Italy", "en-GB", "IT:en"),
+    ("ES", "Spain", "en-GB", "ES:en"),
 ]
 
+HORROR_TERMS = [
+    "horror", "haunted", "ghost", "paranormal",
+    "mystery", "mysterious", "abandoned",
+    "missing", "disappearance", "creepy",
+    "serial killer", "unsolved", "dark web",
+    "urban legend", "supernatural", "witch",
+    "demon", "exorcism", "cemetery", "eerie",
+    "haunting", "nightmare", "cryptid"
+]
 
-def main():
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat = os.environ["TELEGRAM_CHAT_ID"]
-    worker = os.environ["CLOUDFLARE_WORKER_URL"].rstrip("/")
-    ingest_secret = os.environ["TOPIC_INGEST_SECRET"]
-
-    # Select the same five ideas throughout each UTC day.
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    seed = int(hashlib.sha256(today.encode()).hexdigest()[:8], 16)
-    rng = random.Random(seed)
-    selected = rng.sample(IDEAS, 5)
-
-    for story, region, premise in selected:
-        tid = uuid.uuid4().hex[:10]
-        title = f"{story} — {region}"
-
-        r = requests.post(
-            worker + "/topic",
-            headers={"x-topic-ingest-secret": ingest_secret},
-            json={"id": tid, "title": title},
-            timeout=20
-        )
-        r.raise_for_status()
-
-        keyboard = {
-            "inline_keyboard": [[
-                {
-                    "text": "✅ Approve & create story pack",
-                    "callback_data": "approve:" + tid
-                },
-                {
-                    "text": "Skip",
-                    "callback_data": "skip:" + tid
-                }
-            ]]
-        }
-
-        message = (
-            "DAILY HORROR STORY IDEAS\n"
-            "US / UK / EUROPE\n\n"
-            f"TITLE: {story}\n"
-            f"SETTING: {region}\n\n"
-            f"STORY CONCEPT:\n{premise}\n\n"
-            "Original fictional horror concept. "
-            "English story, narration and subtitles. "
-            "Nothing is generated or published until you approve."
-        )
-
-        response = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
-                "chat_id": chat,
-                "text": message,
-                "reply_markup": keyboard
-            },
-            timeout=20
+def get_feed(url):
+    try:
+        response = requests.get(
+            url, headers=HEADERS, timeout=20
         )
         response.raise_for_status()
 
-    print(f"Successfully sent {len(selected)} horror ideas to Telegram.")
+        root = ET.fromstring(response.content)
+        items = []
 
+        for item in root.findall(".//item"):
+            title = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            pub_date = item.findtext("pubDate", "").strip()
+
+            if title and link:
+                items.append({
+                    "title": title,
+                    "link": link,
+                    "date": pub_date
+                })
+
+        return items
+
+    except Exception as error:
+        print(f"Feed error: {error}")
+        return []
+
+def is_horror_relevant(text):
+    text = text.lower()
+    return any(term in text for term in HORROR_TERMS)
+
+def get_trends():
+    results = []
+
+    for code, country, _, _ in COUNTRIES:
+        url = (
+            "https://trends.google.com/trending/rss"
+            f"?geo={code}"
+        )
+
+        for item in get_feed(url):
+            if is_horror_relevant(item["title"]):
+                item["country"] = country
+                item["source"] = "Google Trends"
+                results.append(item)
+
+        time.sleep(1)
+
+    return results
+
+def get_horror_news():
+    results = []
+
+    queries = [
+        '"haunted" OR "paranormal" OR "ghost"',
+        '"horror mystery" OR "unsolved mystery"',
+        '"abandoned place" OR "urban legend"',
+        '"strange disappearance" OR "creepy discovery"'
+    ]
+
+    for code, country, language, edition in COUNTRIES:
+        for query in queries:
+            url = (
+                "https://news.google.com/rss/search?q="
+                + quote(query)
+                + f"&hl={language}&gl={code}&ceid={edition}"
+            )
+
+            for item in get_feed(url):
+                if is_horror_relevant(item["title"]):
+                    item["country"] = country
+                    item["source"] = "Google News"
+                    results.append(item)
+
+            time.sleep(1)
+
+    return results
+
+def make_concept(item):
+    title = item["title"].split(" - ")[0].strip()
+    return (
+        f"A fictional horror story inspired by this current "
+        f"real-world topic: {title}. "
+        f"Create an original suspenseful mystery set in "
+        f"{item['country']}, with an unexplained event, "
+        f"a disturbing discovery, and a shocking final reveal. "
+        f"Do not present fictional events as real."
+    )
+
+def send_telegram(item):
+    tid = uuid.uuid4().hex[:10]
+    title = item["title"][:180]
+
+    response = requests.post(
+        WORKER + "/topic",
+        headers={
+            "x-topic-ingest-secret": INGEST_SECRET
+        },
+        json={
+            "id": tid,
+            "title": title
+        },
+        timeout=20
+    )
+    response.raise_for_status()
+
+    keyboard = {
+        "inline_keyboard": [[
+            {
+                "text": "✅ Approve & create story pack",
+                "callback_data": "approve:" + tid
+            },
+            {
+                "text": "Skip",
+                "callback_data": "skip:" + tid
+            }
+        ]]
+    }
+
+    message = (
+        "LIVE HORROR TREND SIGNAL\n"
+        "US / UK / EUROPE\n\n"
+        f"COUNTRY: {item['country']}\n"
+        f"SOURCE: {item['source']}\n\n"
+        f"CURRENT TOPIC:\n{title}\n\n"
+        f"STORY CONCEPT:\n{make_concept(item)}\n\n"
+        f"SOURCE LINK:\n{item['link']}\n\n"
+        "This is a fictional story concept inspired by "
+        "a live source. Verify the source before publishing."
+    )
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json={
+            "chat_id": CHAT_ID,
+            "text": message,
+            "reply_markup": keyboard
+        },
+        timeout=20
+    )
+    response.raise_for_status()
+
+def main():
+    print("Collecting Google Trends signals...")
+    trends = get_trends()
+
+    print("Collecting Google News results...")
+    news = get_horror_news()
+
+    combined = trends + news
+
+    unique = {}
+    for item in combined:
+        key = item["title"].lower()
+        if key not in unique:
+            unique[key] = item
+
+    selected = list(unique.values())[:10]
+
+    if not selected:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": CHAT_ID,
+                "text": (
+                    "No relevant live horror signals were found "
+                    "in this run. No fixed or invented trending "
+                    "topics have been substituted."
+                )
+            },
+            timeout=20
+        )
+        print("No relevant live results found.")
+        return
+
+    for item in selected:
+        send_telegram(item)
+        time.sleep(1)
+
+    print(f"Successfully sent {len(selected)} live-source ideas.")
 
 if __name__ == "__main__":
     main()
