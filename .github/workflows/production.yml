@@ -45,7 +45,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   produce:
@@ -79,7 +78,7 @@ jobs:
         run: PYTHONPATH=. python scripts/create_story_pack.py
 
       - name: Receive individual Telegram clip
-        id: receive
+        id: receive_clip
         if: inputs.action == 'receive_clip'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
@@ -94,14 +93,14 @@ jobs:
         run: PYTHONPATH=. python scripts/receive_telegram_clip.py
 
       - name: Install FFmpeg
-        if: inputs.action == 'render' || (inputs.action == 'receive_clip' && steps.receive.outputs.all_clips == 'true')
+        if: inputs.action == 'render' || (inputs.action == 'receive_clip' && steps.receive_clip.outputs.all_clips == 'true')
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
       - name: Render video from Drive clips
         id: render
-        if: inputs.action == 'render' || (inputs.action == 'receive_clip' && steps.receive.outputs.all_clips == 'true')
+        if: inputs.action == 'render' || (inputs.action == 'receive_clip' && steps.receive_clip.outputs.all_clips == 'true')
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -142,7 +141,7 @@ jobs:
         run: python -m src.notify_telegram
 
       - name: Save render metadata
-        if: always() && steps.render.outcome != 'skipped'
+        if: always() && steps.render.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: horror-${{ inputs.job_id }}-metadata
