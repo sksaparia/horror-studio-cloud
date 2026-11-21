@@ -45,6 +45,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   produce:
@@ -59,12 +60,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Install FFmpeg
-        if: inputs.action == 'render'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
@@ -84,6 +79,7 @@ jobs:
         run: PYTHONPATH=. python scripts/create_story_pack.py
 
       - name: Receive individual Telegram clip
+        id: receive
         if: inputs.action == 'receive_clip'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
@@ -97,9 +93,15 @@ jobs:
           FORMAT: ${{ inputs.format }}
         run: PYTHONPATH=. python scripts/receive_telegram_clip.py
 
+      - name: Install FFmpeg
+        if: inputs.action == 'render' || (inputs.action == 'receive_clip' && steps.receive.outputs.all_clips == 'true')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Render video from Drive clips
         id: render
-        if: inputs.action == 'render'
+        if: inputs.action == 'render' || (inputs.action == 'receive_clip' && steps.receive.outputs.all_clips == 'true')
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -111,7 +113,7 @@ jobs:
           python -m src.render "${{ inputs.job_id }}" | tee work/render-result.json
 
       - name: Upload video to YouTube
-        if: inputs.action == 'render'
+        if: steps.render.outcome == 'success'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -133,14 +135,14 @@ jobs:
           PY
 
       - name: Send finished video to Telegram
-        if: always() && inputs.action == 'render' && steps.render.outcome == 'success'
+        if: always() && steps.render.outcome == 'success'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m src.notify_telegram
 
       - name: Save render metadata
-        if: always() && inputs.action == 'render'
+        if: always() && steps.render.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: horror-${{ inputs.job_id }}-metadata
