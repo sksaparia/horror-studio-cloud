@@ -5,25 +5,43 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'story_pack or render'
+        description: 'story_pack, receive_clip or render'
         required: true
         default: 'story_pack'
         type: choice
-        options: [story_pack, render]
+        options:
+          - story_pack
+          - receive_clip
+          - render
+
       job_id:
         description: 'Drive INBOX job folder name'
         required: true
         type: string
+
       topic_title:
         description: 'Approved topic'
         required: false
         type: string
+
       format:
         description: 'short or long'
         required: false
         default: 'short'
         type: choice
-        options: [short, long]
+        options:
+          - short
+          - long
+
+      telegram_file_id:
+        description: 'Telegram video file ID'
+        required: false
+        type: string
+
+      scene_number:
+        description: 'Scene number, for example 1, 2, 3'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -34,14 +52,19 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        if: inputs.action == 'render'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
@@ -60,7 +83,21 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: PYTHONPATH=. python scripts/create_story_pack.py
 
+      - name: Receive individual Telegram clip
+        if: inputs.action == 'receive_clip'
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          DRIVE_INBOX_FOLDER_ID: ${{ secrets.DRIVE_INBOX_FOLDER_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JOB_ID: ${{ inputs.job_id }}
+          TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
+          SCENE_NUMBER: ${{ inputs.scene_number }}
+        run: PYTHONPATH=. python scripts/receive_telegram_clip.py
+
       - name: Render video from Drive clips
+        id: render
         if: inputs.action == 'render'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
@@ -83,7 +120,9 @@ jobs:
           python - <<'PY'
           import json
           from src.youtube import main
+
           result = json.load(open("work/render-result.json", encoding="utf-8"))
+
           if result.get("publish"):
               url = main("work/final.mp4", "work/manifest.json")
               with open("work/youtube-result.json", "w", encoding="utf-8") as f:
@@ -92,8 +131,8 @@ jobs:
               print("YouTube upload skipped: manifest publish is false.")
           PY
 
-      - name: Send finished Short to Telegram
-        if: inputs.action == 'render'
+      - name: Send finished video to Telegram
+        if: always() && inputs.action == 'render' && steps.render.outcome == 'success'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -106,6 +145,3 @@ jobs:
           name: horror-${{ inputs.job_id }}-metadata
           path: work/
           if-no-files-found: ignore
-      - name: Install FFmpeg
-        if: inputs.action == 'render'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
