@@ -61,7 +61,6 @@ function getSceneNumber(message, nextScene) {
 
 async function handleVideo(message, env) {
   const chat = message.chat.id;
-
   const activeRaw = await env.HORROR_TOPICS.get("ACTIVE_JOB");
 
   if (!activeRaw) {
@@ -176,6 +175,7 @@ export default {
               "/trending - Find horror topics\n" +
               "/format short - 5 clips\n" +
               "/format long - 48 clips\n" +
+              "/repair JOB_ID | TOPIC_TITLE - Repair story manifest\n" +
               "/status - Check GitHub Actions\n\n" +
               "Approve a topic first. Then upload MP4 clips one by one.\n" +
               "Use caption 1, 2, 3... to identify scenes. Without a caption, the next scene number is assigned automatically."
@@ -201,6 +201,57 @@ export default {
             chat_id: chat,
             text: `Selected format: ${format.toUpperCase()}. This will apply to the next approved topic.`
           });
+
+        } else if (text.startsWith("/repair ")) {
+          const input = text.slice(8).trim();
+          const separator = input.indexOf("|");
+
+          if (separator === -1) {
+            await tg(env, "sendMessage", {
+              chat_id: chat,
+              text: "Use:\n/repair JOB_ID | TOPIC_TITLE"
+            });
+          } else {
+            const id = input.slice(0, separator).trim();
+            const title = input.slice(separator + 1).trim();
+
+            if (
+              !/^[A-Za-z0-9_-]{1,100}$/.test(id) ||
+              !title ||
+              title.length > 200
+            ) {
+              await tg(env, "sendMessage", {
+                chat_id: chat,
+                text: "Invalid Job ID or topic title."
+              });
+            } else {
+              const activeRaw = await env.HORROR_TOPICS.get("ACTIVE_JOB");
+              const active = activeRaw ? JSON.parse(activeRaw) : null;
+
+              const format =
+                active && active.job_id === id
+                  ? active.format
+                  : "short";
+
+              await dispatchWorkflow(env, "production.yml", {
+                action: "story_pack",
+                job_id: id,
+                topic_title: title,
+                format
+              });
+
+              await tg(env, "sendMessage", {
+                chat_id: chat,
+                text:
+                  "Manifest repair workflow started.\n\n" +
+                  `Job ID: ${id}\n` +
+                  `Format: ${format.toUpperCase()}\n` +
+                  `Topic: ${title}\n\n` +
+                  "The story pack will be regenerated in the existing job folder. Existing clips will not be deleted."
+              });
+            }
+          }
+
         } else if (text.startsWith("/approve ")) {
           const id = text.split(/\s+/)[1];
 
